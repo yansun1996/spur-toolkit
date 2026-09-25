@@ -485,7 +485,7 @@ Controllers upgrade in inventory order by default. To upgrade them in a specific
 
 #### Busy-node handling — pick exactly one mode
 
-A still-busy node is one whose running job didn't drain within `spur_drain_wait_secs` (default `120s`). By default the run just aborts there. Three flags change that, **each a full alternative strategy — set at most one; the guard-rail play fails fast if you set more than one**. Force and trust-stepd already commit to proceeding either way, so they skip the wait entirely and check busy status once, immediately after issuing the drain — only refuse/skip need the full window, since for them the busy/not-busy answer changes what actually happens:
+A still-busy node is one whose running job didn't drain within `spur_drain_wait_secs` (default `120s`). By default the run just aborts there. Three flags change that, **each a full alternative strategy — set at most one; the guard-rail play fails fast if you set more than one**. Force and trust-stepd already commit to proceeding either way, so neither waits out the full window: force checks busy status once, immediately after issuing the drain (a false-busy read there only costs a harmless extra kill sweep); trust-stepd gives it a brief bounded retry instead of one shot, since a false-busy read on a node with no `spurstepd` yet would otherwise abort the whole run. Only refuse/skip need the full window, since for them the busy/not-busy answer changes what actually happens:
 
 | Mode | Flag | What happens to the busy node | What happens to its running job |
 |---|---|---|---|

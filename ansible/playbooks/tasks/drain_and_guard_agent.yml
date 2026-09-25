@@ -39,10 +39,13 @@
 # nothing left to protect. Also accepts DOWN as a fully-drained outcome: a
 # genuinely unreachable agent may independently cross its heartbeat timeout.
 - name: Drain this node and wait for it to fully drain
-  # Force/trust-stepd modes check once, no wait: both already commit to a
-  # specific outcome for a busy node regardless of how much longer its job
-  # runs, and the controller flips Draining->Drain synchronously off job
-  # completion (no reconciliation lag to wait out either).
+  # Force mode checks once, no wait: it commits to killing a busy node either
+  # way, and a false-busy read only costs an extra no-op kill sweep. Trust-stepd
+  # gets a brief bounded retry instead of one shot — a false-busy read there
+  # aborts the WHOLE run on a node with no spurstepd yet (not just this host),
+  # so it's worth a beat to let the controller's own in-memory state (updated
+  # synchronously off job completion, not on a delay) catch up if the job
+  # finished right as this drain was issued.
   ansible.builtin.shell: |
     set -o pipefail
     drain_out=$({{ spur_install_dir }}/spur node drain {{ spur_node_name }} --reason "ansible {{ dckj_action }}" 2>&1)
@@ -60,13 +63,23 @@
         | awk -v n="{{ spur_node_name }}" '/^NodeName=/{p=($0=="NodeName="n)} p' \
         | grep -oE 'State=[A-Z]+' | head -1 | cut -d= -f2
     }
-    if [ "{{ dckj_force_busy | default(false) | bool | lower }}" = "true" ] \
-       || [ "{{ dckj_trust_stepd | default(false) | bool | lower }}" = "true" ]; then
+    if [ "{{ dckj_force_busy | default(false) | bool | lower }}" = "true" ]; then
       st=$(check_state)
       case "$st" in
         DRAINED|DOWN) echo "RESULT=DRAINED"; exit 0 ;;
       esac
-      echo "RESULT=BUSY (force/trust-stepd mode — proceeding immediately instead of waiting up to {{ spur_drain_wait_secs | default(120) }}s)"
+      echo "RESULT=BUSY (force mode — proceeding immediately instead of waiting up to {{ spur_drain_wait_secs | default(120) }}s)"
+      exit 0
+    fi
+    if [ "{{ dckj_trust_stepd | default(false) | bool | lower }}" = "true" ]; then
+      for i in 1 2 3; do
+        st=$(check_state)
+        case "$st" in
+          DRAINED|DOWN) echo "RESULT=DRAINED"; exit 0 ;;
+        esac
+        [ "$i" -lt 3 ] && sleep 0.5
+      done
+      echo "RESULT=BUSY (trust-stepd mode — proceeding after a brief settle instead of waiting up to {{ spur_drain_wait_secs | default(120) }}s)"
       exit 0
     fi
     for i in $(seq 1 {{ spur_drain_wait_secs | default(120) }}); do
